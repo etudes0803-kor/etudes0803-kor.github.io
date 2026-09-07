@@ -1,0 +1,324 @@
+<!doctype html>
+<html lang="ko">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>PR Brief — Chordy Studio</title>
+<meta name="description" content="GitHub Pull Request를 받아 LLM으로 요약하고 PR 댓글과 Slack으로 전달하는 봇. 설정 절차와 동작 방식.">
+<link rel="canonical" href="https://etudes0803-kor.github.io/prbrief.html">
+<meta property="og:type" content="article">
+<meta property="og:title" content="PR Brief — Chordy Studio">
+<meta property="og:description" content="PR이 길어 리뷰가 밀리는 팀을 위한 요약 봇. 웹훅 하나 걸면 PR 댓글로 요약이 붙습니다.">
+<meta property="og:url" content="https://etudes0803-kor.github.io/prbrief.html">
+<link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'><text y='26' font-size='26'>🎹</text></svg>">
+<style>
+  /* index.html 과 같은 토큰 계열. 이 사이트는 빌드 단계가 없어서 페이지마다
+     자기 스타일을 들고 다닌다 — 값을 바꾸면 두 파일을 함께 고쳐야 한다. */
+  :root {
+    --bg: #fbfbfa;
+    --surface: #ffffff;
+    --line: #e4e4e2;
+    --line-strong: #d2d2cf;
+    --ink: #18181b;
+    --ink-2: #52525b;
+    --ink-3: #6b6b68;
+    --accent: #0f766e;
+    --accent-ink: #ffffff;
+    --accent-soft: #e6f2f0;
+    --radius: 10px;
+    --maxw: 1000px;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root {
+      --bg: #0d0e11;
+      --surface: #14161a;
+      --line: #24272d;
+      --line-strong: #333740;
+      --ink: #f2f3f5;
+      --ink-2: #a8adb6;
+      --ink-3: #7c828c;
+      --accent: #4db6a8;
+      --accent-ink: #0d0e11;
+      --accent-soft: #16302c;
+    }
+  }
+
+  * { box-sizing: border-box; }
+  html { scroll-behavior: smooth; }
+  @media (prefers-reduced-motion: reduce) { html { scroll-behavior: auto; } }
+
+  body {
+    margin: 0;
+    background: var(--bg);
+    color: var(--ink);
+    font-family: ui-sans-serif, system-ui, -apple-system, "Segoe UI", "Malgun Gothic", sans-serif;
+    font-size: 16px;
+    line-height: 1.65;
+    -webkit-font-smoothing: antialiased;
+  }
+  .wrap { max-width: var(--maxw); margin: 0 auto; padding: 0 24px; }
+
+  header.nav {
+    position: sticky; top: 0; z-index: 40;
+    height: 64px; display: flex; align-items: center;
+    background: var(--bg);
+    border-bottom: 1px solid var(--line);
+  }
+  .nav-in { display: flex; align-items: center; justify-content: space-between; gap: 20px; width: 100%; }
+  .brand { font-weight: 650; letter-spacing: -0.02em; font-size: 17px; text-decoration: none; color: var(--ink); }
+  .brand b { color: var(--accent); font-weight: 650; }
+  .nav-links { display: flex; align-items: center; gap: 22px; }
+  .nav-links a { color: var(--ink-2); text-decoration: none; font-size: 14.5px; white-space: nowrap; }
+  .nav-links a:hover { color: var(--ink); }
+  a:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+
+  section { padding: 64px 0; border-top: 1px solid var(--line); }
+  h1, h2, h3 { letter-spacing: -0.025em; line-height: 1.18; margin: 0; }
+  h1 { font-size: clamp(1.9rem, 3.8vw, 2.6rem); font-weight: 640; }
+  h2 { font-size: clamp(1.35rem, 2.5vw, 1.7rem); font-weight: 620; }
+  h3 { font-size: 1.02rem; font-weight: 600; }
+  p { margin: 0; }
+  .lede { color: var(--ink-2); font-size: 1.05rem; max-width: 62ch; }
+  .eyebrow {
+    font-size: 12px; text-transform: uppercase; letter-spacing: .14em;
+    color: var(--accent); font-weight: 620; margin-bottom: 14px;
+  }
+  .tag {
+    font-size: 12px; font-weight: 600; letter-spacing: .02em;
+    padding: 3px 9px; border-radius: 999px;
+    background: var(--accent-soft); color: var(--accent);
+    white-space: nowrap;
+  }
+  .tag-muted { background: transparent; color: var(--ink-3); border: 1px solid var(--line-strong); }
+
+  .hero { padding: 80px 0 64px; border-top: 0; }
+  .hero .lede { margin-top: 20px; }
+  .hero .tag { display: inline-block; margin-bottom: 18px; }
+
+  .note {
+    margin-top: 28px; padding: 18px 20px;
+    background: var(--surface); border: 1px solid var(--line);
+    border-left: 3px solid var(--accent);
+    border-radius: var(--radius);
+    color: var(--ink-2); font-size: 15px; max-width: 62ch;
+  }
+  .note strong { color: var(--ink); font-weight: 600; }
+
+  .body-copy { color: var(--ink-2); max-width: 62ch; margin-top: 16px; }
+  .body-copy + .body-copy { margin-top: 14px; }
+
+  dl.facts { display: grid; grid-template-columns: 170px 1fr; gap: 12px 24px; margin: 28px 0 0; font-size: 15px; }
+  dl.facts dt { color: var(--ink-3); }
+  dl.facts dd { margin: 0; color: var(--ink-2); }
+  @media (max-width: 620px) {
+    dl.facts { grid-template-columns: 1fr; gap: 2px 0; }
+    dl.facts dd { margin-bottom: 12px; }
+  }
+
+  ol.steps { list-style: none; counter-reset: step; padding: 0; margin: 32px 0 0; }
+  ol.steps > li { counter-increment: step; position: relative; padding-left: 44px; margin-bottom: 30px; }
+  ol.steps > li::before {
+    content: counter(step);
+    position: absolute; left: 0; top: 1px;
+    width: 28px; height: 28px; border-radius: 999px;
+    background: var(--accent-soft); color: var(--accent);
+    font-size: 14px; font-weight: 650;
+    display: flex; align-items: center; justify-content: center;
+  }
+  ol.steps p { color: var(--ink-2); font-size: 15px; margin-top: 6px; max-width: 58ch; }
+
+  /* 코드는 페이지가 아니라 자기 상자 안에서 가로 스크롤한다 — 긴 curl 한 줄 때문에
+     본문 전체가 옆으로 밀리면 모바일에서 글이 읽히지 않는다. */
+  pre {
+    margin: 12px 0 0;
+    padding: 14px 16px;
+    background: var(--surface);
+    border: 1px solid var(--line);
+    border-radius: var(--radius);
+    overflow-x: auto;
+    font-size: 13.5px;
+    line-height: 1.6;
+  }
+  pre, code { font-family: ui-monospace, SFMono-Regular, "Cascadia Mono", Consolas, monospace; }
+  pre code { color: var(--ink); }
+  p code, li code, dd code {
+    font-size: 13.5px; padding: 1px 5px; border-radius: 5px;
+    background: var(--surface); border: 1px solid var(--line); color: var(--ink);
+  }
+
+  ul.plain { margin: 16px 0 0; padding-left: 20px; color: var(--ink-2); font-size: 15px; max-width: 62ch; }
+  ul.plain li { margin-bottom: 8px; }
+
+  .contact { display: grid; grid-template-columns: 180px 1fr; gap: 14px 24px; margin-top: 28px; font-size: 15px; }
+  .contact dt { color: var(--ink-3); }
+  .contact dd { margin: 0; color: var(--ink-2); }
+  .contact a { color: var(--accent); text-decoration: none; }
+  .contact a:hover { text-decoration: underline; }
+  @media (max-width: 560px) { .contact { grid-template-columns: 1fr; gap: 4px 0; } .contact dd { margin-bottom: 12px; } }
+
+  footer {
+    border-top: 1px solid var(--line);
+    padding: 32px 0 48px;
+    color: var(--ink-3); font-size: 14px;
+    display: flex; flex-wrap: wrap; gap: 8px 20px; align-items: center; justify-content: space-between;
+  }
+  footer a { color: var(--ink-3); }
+</style>
+</head>
+<body>
+
+<header class="nav">
+  <div class="wrap nav-in">
+    <a class="brand" href="/">Chordy<b> Studio</b></a>
+    <nav class="nav-links">
+      <a href="/#products">제품</a>
+      <a href="/#contact">문의</a>
+    </nav>
+  </div>
+</header>
+
+<main>
+  <section class="hero">
+    <div class="wrap">
+      <p class="eyebrow">PR Brief</p>
+      <span class="tag tag-muted">비공개 운영</span>
+      <h1>PR이 길어서 리뷰가 밀린다면.</h1>
+      <p class="lede">
+        GitHub Pull Request가 열리거나 갱신되면 웹훅을 받아 내용을 요약하고,
+        그 요약을 PR 댓글로 붙여 줍니다. 리뷰어가 diff를 열기 전에
+        무엇이 바뀌었고 어디를 봐야 하는지 먼저 읽게 하는 것이 전부입니다.
+      </p>
+      <div class="note">
+        <strong>지금은 신청을 받아 계정을 열어 드리는 방식으로 운영합니다.</strong>
+        공개 가입은 아직 열지 않았습니다 — 아래 문의 메일로 조직/저장소를 알려 주시면
+        접속 주소와 API 키를 회신합니다.
+      </div>
+    </div>
+  </section>
+
+  <section>
+    <div class="wrap">
+      <h2>요약에 담기는 것</h2>
+      <p class="body-copy">
+        모델이 자유롭게 쓰는 글이 아니라 정해진 여섯 칸을 채웁니다. 칸이 고정돼 있어야
+        매번 같은 자리에서 같은 것을 읽을 수 있고, 봇 댓글을 훑는 데 드는 시간이 줄어듭니다.
+      </p>
+      <dl class="facts">
+        <dt>TL;DR</dt>
+        <dd>이 PR이 무엇을 하는지 한 문단</dd>
+        <dt>변경점</dt>
+        <dd>커밋과 파일에서 뽑은 실제 변경 목록</dd>
+        <dt>영향 범위</dt>
+        <dd>건드린 모듈·디렉터리</dd>
+        <dt>리뷰 포인트</dt>
+        <dd>먼저 봐야 할 자리</dd>
+        <dt>액션 아이템</dt>
+        <dd>머지 전에 해야 할 일</dd>
+        <dt>위험도</dt>
+        <dd>low · medium · high</dd>
+      </dl>
+    </div>
+  </section>
+
+  <section>
+    <div class="wrap">
+      <h2>동작 방식</h2>
+      <ul class="plain">
+        <li><code>opened</code> · <code>edited</code> · <code>synchronize</code> 이벤트를 처리합니다.</li>
+        <li>웹훅 서명을 검증하고, 같은 delivery가 두 번 오면 두 번째는 버립니다.</li>
+        <li>같은 head SHA에 대해서는 요약을 캐시합니다 — 라벨만 바꿔도 다시 모델을 부르지 않습니다.</li>
+        <li>봇 댓글은 새로 달지 않고 기존 댓글을 갱신합니다(설정으로 매번 새 댓글도 가능).</li>
+        <li>lock 파일과 생성된 파일은 요약 입력에서 제외하고, 본문이 길면 잘라서 넣습니다.</li>
+        <li>모델 호출이 실패하면 그 이벤트만 실패로 남고 규칙 기반 임시 요약이 대신 나갑니다.
+          서버는 죽지 않고, 임시 요약은 캐시되지 않아 다음 push에서 다시 시도합니다.</li>
+        <li>Slack Incoming Webhook을 등록해 두면 같은 요약을 채널로도 보냅니다.
+          Slack 실패는 전체 실패로 보지 않습니다.</li>
+      </ul>
+    </div>
+  </section>
+
+  <section>
+    <div class="wrap">
+      <h2>설정</h2>
+      <p class="body-copy">
+        세 번의 요청이면 끝납니다. <code>&lt;host&gt;</code> 자리에는 회신받은 주소를 넣으세요.
+      </p>
+
+      <ol class="steps">
+        <li>
+          <h3>계정 만들기</h3>
+          <p>API 키는 이 응답에서 <strong>한 번만</strong> 보여 줍니다. 바로 보관하세요.</p>
+<pre><code>curl -X POST https://&lt;host&gt;/api/accounts \
+  -H "Content-Type: application/json" \
+  -d '{"name":"팀 이름","email":"you@example.com"}'</code></pre>
+        </li>
+
+        <li>
+          <h3>저장소 등록</h3>
+          <p>
+            저장소마다 GitHub 토큰을 함께 넣습니다. 권한은 <strong>대상 저장소의 Issues(댓글) write
+            하나면 충분합니다</strong> — 그 이상은 주지 마세요. 토큰은 암호화해 저장하고,
+            응답으로 이 저장소 전용 웹훅 시크릿이 나옵니다.
+          </p>
+<pre><code>curl -X POST https://&lt;host&gt;/api/repos \
+  -H "X-Api-Key: prb_..." \
+  -H "Content-Type: application/json" \
+  -d '{"full_name":"owner/repo","github_token":"ghp_..."}'</code></pre>
+        </li>
+
+        <li>
+          <h3>GitHub 웹훅 걸기</h3>
+          <p>
+            저장소 <em>Settings → Webhooks → Add webhook</em>에서 Payload URL은
+            <code>https://&lt;host&gt;/webhooks/github</code>, Content type은
+            <code>application/json</code>, Secret은 2번에서 받은 값, 이벤트는
+            <em>Pull requests</em>만 선택합니다. 저장한 뒤 PR을 하나 열어 보고
+            Recent Deliveries가 200이면 연결된 것입니다.
+          </p>
+        </li>
+      </ol>
+
+      <p class="body-copy">사용량은 언제든 확인할 수 있습니다.</p>
+<pre><code>curl https://&lt;host&gt;/api/usage -H "X-Api-Key: prb_..."</code></pre>
+    </div>
+  </section>
+
+  <section>
+    <div class="wrap">
+      <h2>안 되면 볼 곳</h2>
+      <dl class="facts">
+        <dt>댓글이 안 달림</dt>
+        <dd><code>/api/events?status=failed</code>로 원인을 보고 <code>POST /api/events/{id}/retry</code></dd>
+        <dt>401 응답</dt>
+        <dd>웹훅 시크릿 불일치 — GitHub 설정과 2번에서 받은 값을 대조</dd>
+        <dt>"임시 요약"이 옴</dt>
+        <dd>모델 호출 실패. 다음 push에서 자동으로 다시 시도합니다</dd>
+        <dt>재시작 후 밀린 것</dt>
+        <dd>기동 시 자동 재처리됩니다. 남아 있으면 위의 retry</dd>
+      </dl>
+    </div>
+  </section>
+
+  <section>
+    <div class="wrap">
+      <h2>문의</h2>
+      <p class="lede" style="margin-top:16px">
+        계정 신청, 버그 신고, 자체 호스팅 문의 모두 아래로 받습니다.
+      </p>
+      <dl class="contact">
+        <dt>이메일</dt>
+        <dd><a href="mailto:etudes0803@gmail.com">etudes0803@gmail.com</a></dd>
+        <dt>다른 제품</dt>
+        <dd><a href="/">Chordy Studio</a></dd>
+      </dl>
+    </div>
+  </section>
+</main>
+
+<footer class="wrap">
+  <span>© 2026 Chordy Studio</span>
+  <span><a href="mailto:etudes0803@gmail.com">etudes0803@gmail.com</a></span>
+</footer>
+
+</body>
+</html>
