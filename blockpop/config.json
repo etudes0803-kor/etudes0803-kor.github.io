@@ -1,0 +1,10 @@
+{
+  "_comment": "원격 튜닝 — 이 파일을 수정해 배포하면 앱 업데이트 없이 경제/광고 파라미터가 바뀐다. 키는 src/state.ts ECON과 동일해야 적용됨.",
+  "dailyFreeRotations": 3,
+  "dailyAdRotationCap": 5,
+  "rotationCoinPrice": 200,
+  "hammerCoinPrice": 150,
+  "swapCoinPrice": 100,
+  "coinsPerLine": 10,
+  "coinsPerStar": 20
+}
